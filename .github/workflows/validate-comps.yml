@@ -1,0 +1,78 @@
+name: Validate Comparable Company Models
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install validation dependency
+        run: python -m pip install openpyxl
+
+      - name: Validate workbook structure
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from openpyxl import load_workbook
+
+          expected = {
+              'models/Airbus_Trading_Comps.xlsx': [
+                  {'Model Guide'},
+                  {'Trading Comps', 'Trading_Comps'},
+                  {'Implied Valuation', 'Implied_Valuation'},
+              ],
+              'models/LVMH_Trading_Comps.xlsx': [
+                  {'Model Guide'},
+                  {'Assumptions'},
+                  {'Sources'},
+                  {'Trading Comps', 'Trading_Comps'},
+                  {'Implied Valuation', 'Implied_Valuation'},
+                  {'Luxury Industry Dashboard', 'Luxury_Industry_Dashboard'},
+              ],
+          }
+
+          error_tokens = {'#REF!', '#DIV/0!', '#VALUE!', '#NAME?', '#N/A', '#NUM!', '#NULL!'}
+          failures = []
+
+          for rel, required_groups in expected.items():
+              path = Path(rel)
+              if not path.exists():
+                  failures.append(f'Missing workbook: {rel}')
+                  continue
+              try:
+                  wb = load_workbook(path, read_only=True, data_only=False)
+              except Exception as exc:
+                  failures.append(f'Cannot open {rel}: {exc}')
+                  continue
+
+              names = set(wb.sheetnames)
+              for group in required_groups:
+                  if not names.intersection(group):
+                      failures.append(f'{rel}: missing expected sheet group {sorted(group)}')
+
+              for ws in wb.worksheets:
+                  for row in ws.iter_rows():
+                      for cell in row:
+                          if isinstance(cell.value, str) and any(token in cell.value for token in error_tokens):
+                              failures.append(f'{rel}: Excel error token {cell.value!r} in {ws.title}!{cell.coordinate}')
+                              break
+                      if failures and failures[-1].startswith(rel + ': Excel error token'):
+                          break
+
+          if failures:
+              print('\n'.join(failures))
+              raise SystemExit(1)
+
+          print('All comparable-company workbooks passed structural validation.')
+          PY
