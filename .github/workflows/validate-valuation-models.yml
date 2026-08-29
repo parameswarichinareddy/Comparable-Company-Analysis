@@ -1,0 +1,72 @@
+name: Validate Valuation Models
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-excel-models:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install workbook validation dependency
+        run: pip install openpyxl
+
+      - name: Validate Excel workbooks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from openpyxl import load_workbook
+
+          required = {
+              'models/Airbus_Trading_Comps.xlsx': ['Model Guide', 'Trading Comps', 'Implied Valuation'],
+              'models/LVMH_Trading_Comps.xlsx': ['Model Guide', 'Assumptions', 'Sources', 'Trading Comps', 'Implied Valuation', 'Luxury Industry Dashboard'],
+              'models/Baker_Hughes_Chart_Precedent_Transactions_Analysis_Model.xlsx': [
+                  'Dashboard', 'Transaction Overview', 'Target Financials', 'Target Capitalization',
+                  'Precedent Transactions', 'Transaction Multiples', 'Premium Analysis', 'PTA Valuation',
+                  'Sensitivity Analysis', 'Football Field', 'Transaction Screening', 'Sources & Checks'
+              ],
+          }
+
+          errors = []
+          excel_error_literals = {'#REF!', '#DIV/0!', '#VALUE!', '#NAME?', '#N/A', '#NUM!', '#NULL!'}
+
+          for filename, expected_sheets in required.items():
+              path = Path(filename)
+              if not path.exists():
+                  errors.append(f'Missing workbook: {filename}')
+                  continue
+
+              try:
+                  wb = load_workbook(path, read_only=True, data_only=False)
+                  missing = [s for s in expected_sheets if s not in wb.sheetnames]
+                  if missing:
+                      errors.append(f'{filename}: missing worksheets: {missing}')
+
+                  for ws in wb.worksheets:
+                      for row in ws.iter_rows():
+                          for cell in row:
+                              if isinstance(cell.value, str) and cell.value in excel_error_literals:
+                                  errors.append(f'{filename}: Excel error {cell.value} at {ws.title}!{cell.coordinate}')
+                                  break
+                          if errors and errors[-1].startswith(filename + ': Excel error'):
+                              break
+                  wb.close()
+              except Exception as exc:
+                  errors.append(f'{filename}: could not open workbook: {exc}')
+
+          if errors:
+              print('\n'.join(errors))
+              raise SystemExit(1)
+
+          print('All valuation workbooks passed structural validation.')
+          PY
